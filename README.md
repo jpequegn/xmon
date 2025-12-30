@@ -67,23 +67,24 @@ digest:
 
 ## Development Status
 
-### Phase 1 (MVP)
-- [ ] Project setup
-- [ ] init command
-- [ ] add/remove commands
-- [ ] accounts command
-- [ ] X API client
-- [ ] fetch command
-- [ ] digest command
-- [ ] show command
+### Phase 1 (MVP) - Complete
+- [x] Project setup (Go, Cobra, SQLite)
+- [x] init command (config, database, bearer token setup)
+- [x] add / remove commands
+- [x] accounts command
+- [x] X API client (user lookup, timeline fetch)
+- [x] fetch command (pull tweets, respect rate limits)
+- [x] digest command (basic aggregation)
+- [x] show command
 
-### Phase 2 (Intelligence)
-- [ ] LLM integration
-- [ ] Most Amplified detection
-- [ ] Topic extraction
+### Phase 2 (Intelligence) - Planned
+- [ ] LLM integration (Ollama) for --smart summaries
+- [ ] "Most Amplified" detection (who multiple accounts RT)
+- [ ] Topic/keyword extraction
 - [ ] Notable tweets ranking
+- [ ] Monthly API usage tracking with warnings
 
-### Phase 3 (Export & Polish)
-- [ ] export command
-- [ ] Daemon mode
-- [ ] Scraping fallback
+### Phase 3 (Export & Polish) - Planned
+- [ ] export command (markdown generation)
+- [ ] Daemon mode (scheduled fetching)
+- [ ] Scraping fallback (if API limits prove too restrictive)
