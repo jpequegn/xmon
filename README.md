@@ -45,7 +45,7 @@ xmon digest --smart
 | `xmon remove <user>` | Remove an account |
 | `xmon accounts` | List monitored accounts |
 | `xmon fetch` | Pull recent tweets |
-| `xmon digest` | Show activity summary |
+| `xmon digest` | Show activity summary (--smart for AI insights) |
 | `xmon show <user>` | Show user details |
 | `xmon export` | Generate markdown report |
 
@@ -77,12 +77,12 @@ digest:
 - [x] digest command (basic aggregation)
 - [x] show command
 
-### Phase 2 (Intelligence) - Planned
-- [ ] LLM integration (Ollama) for --smart summaries
-- [ ] "Most Amplified" detection (who multiple accounts RT)
-- [ ] Topic/keyword extraction
-- [ ] Notable tweets ranking
-- [ ] Monthly API usage tracking with warnings
+### Phase 2 (Intelligence) - Complete
+- [x] LLM integration (Ollama) for --smart summaries
+- [x] "Most Amplified" detection (who multiple accounts RT)
+- [x] Topic/keyword extraction
+- [x] Notable tweets ranking
+- [x] Monthly API usage tracking with warnings
 
 ### Phase 3 (Export & Polish) - Planned
 - [ ] export command (markdown generation)
