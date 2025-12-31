@@ -20,6 +20,13 @@ type Tweet struct {
 	CreatedAt        time.Time
 }
 
+// AmplifiedUser represents a user who was RTd/quoted with who amplified them
+type AmplifiedUser struct {
+	Username    string
+	AmplifiedBy []string
+	Count       int
+}
+
 type Repository struct {
 	db *database.DB
 }
@@ -150,4 +157,71 @@ func (r *Repository) GetTopTweets(since time.Time, limit int) ([]Tweet, error) {
 		tweets = append(tweets, t)
 	}
 	return tweets, rows.Err()
+}
+
+// GetAmplifiedWithSources returns users who were RTd/quoted along with who amplified them
+func (r *Repository) GetAmplifiedWithSources(since time.Time, minAmplifiers int) ([]AmplifiedUser, error) {
+	rows, err := r.db.Query(`
+		SELECT t.referenced_user, a.username
+		FROM tweets t
+		JOIN accounts a ON t.account_id = a.id
+		WHERE t.created_at >= ?
+			AND t.tweet_type IN ('retweet', 'quote')
+			AND t.referenced_user != ''
+		ORDER BY t.referenced_user
+	`, since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	// Map: referenced_user -> set of amplifiers
+	amplifierMap := make(map[string]map[string]bool)
+
+	for rows.Next() {
+		var refUser, amplifier string
+		if err := rows.Scan(&refUser, &amplifier); err != nil {
+			return nil, err
+		}
+		if amplifierMap[refUser] == nil {
+			amplifierMap[refUser] = make(map[string]bool)
+		}
+		amplifierMap[refUser][amplifier] = true
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Convert to slice, filter by minimum amplifiers
+	var results []AmplifiedUser
+	for user, amplifiers := range amplifierMap {
+		if len(amplifiers) >= minAmplifiers {
+			var names []string
+			for name := range amplifiers {
+				names = append(names, name)
+			}
+			results = append(results, AmplifiedUser{
+				Username:    user,
+				AmplifiedBy: names,
+				Count:       len(names),
+			})
+		}
+	}
+
+	// Sort by count descending
+	for i := 0; i < len(results); i++ {
+		for j := i + 1; j < len(results); j++ {
+			if results[j].Count > results[i].Count {
+				results[i], results[j] = results[j], results[i]
+			}
+		}
+	}
+
+	// Limit to top 10
+	if len(results) > 10 {
+		results = results[:10]
+	}
+
+	return results, nil
 }
