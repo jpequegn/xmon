@@ -34,6 +34,15 @@ xmon digest
 
 # Get AI-powered insights
 xmon digest --smart
+
+# Export to markdown
+xmon export > weekly.md
+
+# Run daemon (fetches every hour by default)
+xmon daemon
+
+# Custom interval (every 30 minutes)
+xmon daemon --interval 30
 ```
 
 ## Commands
@@ -47,7 +56,8 @@ xmon digest --smart
 | `xmon fetch` | Pull recent tweets |
 | `xmon digest` | Show activity summary (--smart for AI insights) |
 | `xmon show <user>` | Show user details |
-| `xmon export` | Generate markdown report |
+| `xmon export` | Generate markdown report (--days) |
+| `xmon daemon` | Run with scheduled fetching (--interval) |
 
 ## Configuration
 
@@ -84,7 +94,6 @@ digest:
 - [x] Notable tweets ranking
 - [x] Monthly API usage tracking with warnings
 
-### Phase 3 (Export & Polish) - Planned
-- [ ] export command (markdown generation)
-- [ ] Daemon mode (scheduled fetching)
-- [ ] Scraping fallback (if API limits prove too restrictive)
+### Phase 3 (Export & Polish) - Complete
+- [x] export command (markdown generation)
+- [x] Daemon mode (scheduled fetching)
