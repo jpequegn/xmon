@@ -2,6 +2,7 @@
 package tweet
 
 import (
+	"sort"
 	"time"
 
 	"github.com/jpequegn/xmon/internal/database"
@@ -201,6 +202,7 @@ func (r *Repository) GetAmplifiedWithSources(since time.Time, minAmplifiers int)
 			for name := range amplifiers {
 				names = append(names, name)
 			}
+			sort.Strings(names)
 			results = append(results, AmplifiedUser{
 				Username:    user,
 				AmplifiedBy: names,
