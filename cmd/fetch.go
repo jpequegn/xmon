@@ -8,6 +8,7 @@ import (
 	"github.com/jpequegn/xmon/internal/config"
 	"github.com/jpequegn/xmon/internal/database"
 	"github.com/jpequegn/xmon/internal/tweet"
+	"github.com/jpequegn/xmon/internal/usage"
 	"github.com/jpequegn/xmon/internal/x"
 	"github.com/spf13/cobra"
 )
@@ -41,6 +42,7 @@ func runFetch(cmd *cobra.Command, args []string) error {
 
 	accountRepo := account.NewRepository(db)
 	tweetRepo := tweet.NewRepository(db)
+	usageRepo := usage.NewRepository(db)
 
 	accounts, err := accountRepo.List()
 	if err != nil {
@@ -50,6 +52,11 @@ func runFetch(cmd *cobra.Command, args []string) error {
 	if len(accounts) == 0 {
 		fmt.Println("No accounts to fetch. Run 'xmon add <username>' first.")
 		return nil
+	}
+
+	// Check API quota
+	if warning := usageRepo.CheckQuota(); warning != "" {
+		fmt.Println(warning)
 	}
 
 	client := x.NewClient(cfg.X.BearerToken)
@@ -99,6 +106,11 @@ func runFetch(cmd *cobra.Command, args []string) error {
 			}
 		}
 
+		// Track API usage
+		if len(tweetsResp.Data) > 0 {
+			usageRepo.AddTweetsRead(len(tweetsResp.Data))
+		}
+
 		accountRepo.UpdateLastFetched(acc.ID)
 		fmt.Printf("  @%s: %d tweets\n", acc.Username, count)
 		totalTweets += count
@@ -110,6 +122,14 @@ func runFetch(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Rate limit: %d requests remaining (resets %s)\n",
 			client.RateLimitRemaining(),
 			client.RateLimitReset().Format("15:04"))
+	}
+
+	// Show quota status
+	if warning := usageRepo.CheckQuota(); warning != "" {
+		fmt.Println(warning)
+	} else {
+		remaining, _ := usageRepo.GetRemainingQuota()
+		fmt.Printf("API quota: %d/%d tweets remaining this month\n", remaining, usage.MonthlyLimit)
 	}
 
 	fmt.Println("Run 'xmon digest' to see the summary.")
