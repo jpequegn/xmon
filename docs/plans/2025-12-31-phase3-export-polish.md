@@ -1,0 +1,343 @@
+# Phase 3 Export & Polish Implementation Plan
+
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** Add markdown export command and daemon mode for scheduled fetching.
+
+**Architecture:** Export command generates structured markdown from digest data, suitable for sharing or archiving. Daemon mode runs fetch on a configurable schedule using Go's ticker, with graceful shutdown handling.
+
+**Tech Stack:** Go, Cobra, existing SQLite database, time.Ticker for scheduling
+
+---
+
+## Task 1: Export Command
+
+**Files:**
+- Create: `cmd/export.go`
+
+**Step 1: Create the export command**
+
+```go
+// cmd/export.go
+package cmd
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/jpequegn/xmon/internal/account"
+	"github.com/jpequegn/xmon/internal/analysis"
+	"github.com/jpequegn/xmon/internal/config"
+	"github.com/jpequegn/xmon/internal/database"
+	"github.com/jpequegn/xmon/internal/tweet"
+	"github.com/spf13/cobra"
+)
+
+var exportCmd = &cobra.Command{
+	Use:   "export",
+	Short: "Generate markdown report",
+	Long:  `Exports activity digest as markdown for sharing or archiving.`,
+	RunE:  runExport,
+}
+
+var (
+	exportDays int
+)
+
+func init() {
+	rootCmd.AddCommand(exportCmd)
+	exportCmd.Flags().IntVar(&exportDays, "days", 7, "Number of days to include in export")
+}
+
+func runExport(cmd *cobra.Command, args []string) error {
+	db, err := database.New(config.DBPath())
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	defer db.Close()
+
+	since := time.Now().AddDate(0, 0, -exportDays)
+	endDate := time.Now()
+
+	accountRepo := account.NewRepository(db)
+	tweetRepo := tweet.NewRepository(db)
+
+	accounts, _ := accountRepo.List()
+	accountMap := make(map[int64]*account.Account)
+	for i := range accounts {
+		accountMap[accounts[i].ID] = &accounts[i]
+	}
+
+	originals, retweets, quotes, _ := tweetRepo.CountByType(since)
+	totalTweets := originals + retweets + quotes
+	tweets, _ := tweetRepo.GetSince(since)
+
+	var sb strings.Builder
+
+	// Header
+	sb.WriteString(fmt.Sprintf("# X Activity Digest\n\n"))
+	sb.WriteString(fmt.Sprintf("**Period:** %s - %s\n\n",
+		since.Format("January 2, 2006"),
+		endDate.Format("January 2, 2006")))
+
+	// Summary
+	sb.WriteString("## Summary\n\n")
+	sb.WriteString(fmt.Sprintf("- **Accounts monitored:** %d\n", len(accounts)))
+	sb.WriteString(fmt.Sprintf("- **Total tweets:** %d\n", totalTweets))
+	sb.WriteString(fmt.Sprintf("- **Original tweets:** %d\n", originals))
+	sb.WriteString(fmt.Sprintf("- **Retweets:** %d\n", retweets))
+	sb.WriteString(fmt.Sprintf("- **Quote tweets:** %d\n\n", quotes))
+
+	// Most Active
+	if len(tweets) > 0 {
+		sb.WriteString("## Most Active\n\n")
+		sb.WriteString("| Account | Tweets |\n")
+		sb.WriteString("|---------|-------:|\n")
+
+		tweetCounts := make(map[int64]int)
+		for _, t := range tweets {
+			tweetCounts[t.AccountID]++
+		}
+
+		type accountTweets struct {
+			username string
+			count    int
+		}
+		var sorted []accountTweets
+		for accID, count := range tweetCounts {
+			if acc, ok := accountMap[accID]; ok {
+				sorted = append(sorted, accountTweets{acc.Username, count})
+			}
+		}
+		sort.Slice(sorted, func(i, j int) bool {
+			return sorted[i].count > sorted[j].count
+		})
+
+		limit := 10
+		if len(sorted) < limit {
+			limit = len(sorted)
+		}
+		for i := 0; i < limit; i++ {
+			sb.WriteString(fmt.Sprintf("| [@%s](https://x.com/%s) | %d |\n",
+				sorted[i].username, sorted[i].username, sorted[i].count))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Most Amplified
+	amplifiedUsers, _ := tweetRepo.GetAmplifiedWithSources(since, 2)
+	if len(amplifiedUsers) > 0 {
+		sb.WriteString("## Most Amplified (retweeted by multiple follows)\n\n")
+		for _, a := range amplifiedUsers {
+			sb.WriteString(fmt.Sprintf("- [@%s](https://x.com/%s) - amplified by %s\n",
+				a.Username, a.Username, strings.Join(a.AmplifiedBy, ", ")))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Trending Topics
+	var tweetContents []string
+	for _, t := range tweets {
+		if t.Content != "" {
+			tweetContents = append(tweetContents, t.Content)
+		}
+	}
+	topics := analysis.ExtractTopics(tweetContents, 10)
+	if len(topics) > 0 {
+		sb.WriteString("## Trending Topics\n\n")
+		sb.WriteString(strings.Join(topics, " · "))
+		sb.WriteString("\n\n")
+	}
+
+	// Notable Tweets
+	topTweets, _ := tweetRepo.GetTopTweets(since, 5)
+	if len(topTweets) > 0 {
+		sb.WriteString("## Notable Tweets\n\n")
+		for _, t := range topTweets {
+			if acc, ok := accountMap[t.AccountID]; ok {
+				content := t.Content
+				if len(content) > 200 {
+					content = content[:197] + "..."
+				}
+				// Escape any markdown in content
+				content = strings.ReplaceAll(content, "\n", " ")
+				sb.WriteString(fmt.Sprintf("**@%s**: %s\n", acc.Username, content))
+				sb.WriteString(fmt.Sprintf("> %d likes · %d RTs\n\n", t.Likes, t.Retweets))
+			}
+		}
+	}
+
+	// Footer
+	sb.WriteString("---\n\n")
+	sb.WriteString(fmt.Sprintf("*Generated by [xmon](https://github.com/jpequegn/xmon) on %s*\n",
+		time.Now().Format("2006-01-02 15:04")))
+
+	fmt.Print(sb.String())
+	return nil
+}
+```
+
+**Step 2: Build and test**
+
+Run:
+```bash
+cd /Users/julienpequegnot/Code/xmon && go build -o xmon . && ./xmon export --help
+```
+
+Expected: Help shows --days flag
+
+**Step 3: Commit**
+
+```bash
+cd /Users/julienpequegnot/Code/xmon && git add . && git commit -m "feat: add export command for markdown reports"
+```
+
+---
+
+## Task 2: Daemon Mode
+
+**Files:**
+- Create: `cmd/daemon.go`
+
+**Step 1: Create the daemon command**
+
+```go
+// cmd/daemon.go
+package cmd
+
+import (
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/spf13/cobra"
+)
+
+var daemonCmd = &cobra.Command{
+	Use:   "daemon",
+	Short: "Run in daemon mode with scheduled fetching",
+	Long:  `Runs xmon in the background, fetching tweets on a schedule.`,
+	RunE:  runDaemon,
+}
+
+var (
+	daemonInterval int
+)
+
+func init() {
+	rootCmd.AddCommand(daemonCmd)
+	daemonCmd.Flags().IntVar(&daemonInterval, "interval", 60, "Fetch interval in minutes")
+}
+
+func runDaemon(cmd *cobra.Command, args []string) error {
+	interval := time.Duration(daemonInterval) * time.Minute
+
+	fmt.Printf("Starting daemon mode (fetch every %v)\n", interval)
+	fmt.Println("Press Ctrl+C to stop")
+
+	// Run initial fetch
+	fmt.Println("\nRunning initial fetch...")
+	if err := runFetch(cmd, args); err != nil {
+		fmt.Printf("Initial fetch error: %v\n", err)
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// Handle graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	for {
+		select {
+		case <-ticker.C:
+			fmt.Printf("\n[%s] Running scheduled fetch...\n", time.Now().Format("15:04:05"))
+			if err := runFetch(cmd, args); err != nil {
+				fmt.Printf("Fetch error: %v\n", err)
+			}
+		case <-sigChan:
+			fmt.Println("\nShutting down daemon...")
+			return nil
+		}
+	}
+}
+```
+
+**Step 2: Build and test**
+
+```bash
+cd /Users/julienpequegnot/Code/xmon && go build -o xmon . && ./xmon daemon --help
+```
+
+Expected: Help shows --interval flag
+
+**Step 3: Commit**
+
+```bash
+cd /Users/julienpequegnot/Code/xmon && git add . && git commit -m "feat: add daemon mode for scheduled fetching"
+```
+
+---
+
+## Task 3: Update README and Final Tests
+
+**Files:**
+- Modify: `README.md`
+
+**Step 1: Run all tests**
+
+```bash
+cd /Users/julienpequegnot/Code/xmon && go test ./... -v
+```
+
+**Step 2: Update README**
+
+Read the current README, then update:
+
+1. Add export and daemon commands to the Commands table:
+```markdown
+| `xmon export` | Generate markdown report (--days) |
+| `xmon daemon` | Run with scheduled fetching (--interval) |
+```
+
+2. Update the Development Status section:
+```markdown
+### Phase 3 (Export & Polish) - Complete
+- [x] export command
+- [x] Daemon mode
+```
+
+3. Add usage examples to Quick Start:
+```markdown
+# Export to markdown
+xmon export > weekly.md
+
+# Run daemon (fetches every hour by default)
+xmon daemon
+
+# Custom interval (every 30 minutes)
+xmon daemon --interval 30
+```
+
+**Step 3: Commit and push**
+
+```bash
+cd /Users/julienpequegnot/Code/xmon && git add . && git commit -m "docs: mark Phase 3 Export & Polish as complete"
+cd /Users/julienpequegnot/Code/xmon && git push
+```
+
+---
+
+## Summary
+
+**Phase 3 delivers:**
+- `export` command for markdown report generation
+- `daemon` command for scheduled fetching
+
+**New capabilities:**
+- `xmon export > weekly.md` - Generate shareable markdown reports
+- `xmon daemon --interval 30` - Automated background fetching
