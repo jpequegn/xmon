@@ -75,7 +75,7 @@ func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
 
 	jsonBody, err := json.Marshal(reqBody)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/generate", bytes.NewBuffer(jsonBody))
@@ -97,7 +97,7 @@ func (c *Client) Generate(ctx context.Context, prompt string) (string, error) {
 
 	var result generateResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to decode response: %w", err)
 	}
 
 	return strings.TrimSpace(result.Response), nil
