@@ -2,13 +2,17 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/jpequegn/xmon/internal/account"
+	"github.com/jpequegn/xmon/internal/analysis"
 	"github.com/jpequegn/xmon/internal/config"
 	"github.com/jpequegn/xmon/internal/database"
+	"github.com/jpequegn/xmon/internal/llm"
 	"github.com/jpequegn/xmon/internal/tweet"
 	"github.com/spf13/cobra"
 )
@@ -21,12 +25,14 @@ var digestCmd = &cobra.Command{
 }
 
 var (
-	digestDays int
+	digestDays  int
+	digestSmart bool
 )
 
 func init() {
 	rootCmd.AddCommand(digestCmd)
 	digestCmd.Flags().IntVar(&digestDays, "days", 7, "Number of days to include in digest")
+	digestCmd.Flags().BoolVar(&digestSmart, "smart", false, "Use LLM for intelligent analysis")
 }
 
 func runDigest(cmd *cobra.Command, args []string) error {
@@ -119,6 +125,21 @@ func runDigest(cmd *cobra.Command, args []string) error {
 		fmt.Println()
 	}
 
+	// Trending Topics
+	tweets, _ := tweetRepo.GetSince(since)
+	var tweetContents []string
+	for _, t := range tweets {
+		if t.Content != "" {
+			tweetContents = append(tweetContents, t.Content)
+		}
+	}
+
+	topics := analysis.ExtractTopics(tweetContents, 8)
+	if len(topics) > 0 {
+		fmt.Printf("%s\n", sectionStyle.Render("📢 Trending Topics"))
+		fmt.Printf("  %s\n\n", dimStyle.Render(strings.Join(topics, " · ")))
+	}
+
 	// Notable Tweets
 	topTweets, _ := tweetRepo.GetTopTweets(since, 3)
 	if len(topTweets) > 0 {
@@ -134,6 +155,96 @@ func runDigest(cmd *cobra.Command, args []string) error {
 			}
 		}
 		fmt.Println()
+	}
+
+	// Smart analysis with LLM
+	if digestSmart {
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Printf("  %s\n\n", dimStyle.Render("Note: Could not load config for LLM analysis"))
+		} else {
+			fmt.Printf("%s\n", sectionStyle.Render("💡 Key Themes (AI-generated)"))
+
+			// Get enhanced amplification data
+			amplifiedUsers, _ := tweetRepo.GetAmplifiedWithSources(since, 2)
+			var llmAmplified []llm.AmplifiedUser
+			for _, a := range amplifiedUsers {
+				llmAmplified = append(llmAmplified, llm.AmplifiedUser{
+					Username:    a.Username,
+					AmplifiedBy: a.AmplifiedBy,
+				})
+			}
+
+			// Get most active
+			tweetCounts := make(map[int64]int)
+			for _, t := range tweets {
+				tweetCounts[t.AccountID]++
+			}
+			var llmActive []llm.UserActivity
+			for accID, count := range tweetCounts {
+				if acc, ok := accountMap[accID]; ok {
+					llmActive = append(llmActive, llm.UserActivity{
+						Username: acc.Username,
+						Count:    count,
+					})
+				}
+			}
+			// Sort by count
+			for i := 0; i < len(llmActive); i++ {
+				for j := i + 1; j < len(llmActive); j++ {
+					if llmActive[j].Count > llmActive[i].Count {
+						llmActive[i], llmActive[j] = llmActive[j], llmActive[i]
+					}
+				}
+			}
+			if len(llmActive) > 5 {
+				llmActive = llmActive[:5]
+			}
+
+			// Get notable tweets
+			topTweets, _ := tweetRepo.GetTopTweets(since, 3)
+			var llmNotable []llm.NotableTweet
+			for _, t := range topTweets {
+				if acc, ok := accountMap[t.AccountID]; ok {
+					llmNotable = append(llmNotable, llm.NotableTweet{
+						Author:  acc.Username,
+						Content: t.Content,
+						Likes:   t.Likes,
+						RTs:     t.Retweets,
+					})
+				}
+			}
+
+			digestData := llm.DigestData{
+				TotalTweets:   totalTweets,
+				TotalOriginal: originals,
+				TotalRetweets: retweets,
+				TotalQuotes:   quotes,
+				TopTopics:     topics,
+				MostAmplified: llmAmplified,
+				MostActive:    llmActive,
+				NotableTweets: llmNotable,
+			}
+
+			prompt := llm.GenerateDigestPrompt(digestData)
+			client := llm.NewClient("http://localhost:11434", cfg.APIs.LLMModel)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			response, err := client.Generate(ctx, prompt)
+			cancel()
+
+			if err != nil {
+				fmt.Printf("  %s\n\n", dimStyle.Render(fmt.Sprintf("LLM analysis unavailable: %v", err)))
+			} else {
+				for _, line := range strings.Split(response, "\n") {
+					line = strings.TrimSpace(line)
+					if line != "" {
+						fmt.Printf("  %s\n", line)
+					}
+				}
+				fmt.Println()
+			}
+		}
 	}
 
 	return nil
