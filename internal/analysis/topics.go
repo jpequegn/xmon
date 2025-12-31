@@ -32,6 +32,14 @@ var stopWords = map[string]bool{
 	"rt": true, "via": true, "amp": true, "https": true, "http": true,
 }
 
+// Package-level compiled regexes to avoid recompilation per call
+var (
+	hashtagRe = regexp.MustCompile(`#(\w+)`)
+	wordRe    = regexp.MustCompile(`\b[a-zA-Z]{3,}\b`)
+	urlRe     = regexp.MustCompile(`https?://\S+`)
+	mentionRe = regexp.MustCompile(`@\w+`)
+)
+
 type TopicCount struct {
 	Topic string
 	Count int
@@ -40,7 +48,6 @@ type TopicCount struct {
 // ExtractHashtags extracts hashtags from tweets
 func ExtractHashtags(tweets []string) []TopicCount {
 	counts := make(map[string]int)
-	hashtagRe := regexp.MustCompile(`#(\w+)`)
 
 	for _, tweet := range tweets {
 		matches := hashtagRe.FindAllStringSubmatch(tweet, -1)
@@ -58,13 +65,12 @@ func ExtractHashtags(tweets []string) []TopicCount {
 // ExtractKeywords extracts significant keywords from tweets
 func ExtractKeywords(tweets []string, minLength int, minCount int) []TopicCount {
 	counts := make(map[string]int)
-	wordRe := regexp.MustCompile(`\b[a-zA-Z]{3,}\b`)
 
 	for _, tweet := range tweets {
 		// Remove URLs
-		tweet = regexp.MustCompile(`https?://\S+`).ReplaceAllString(tweet, "")
+		tweet = urlRe.ReplaceAllString(tweet, "")
 		// Remove mentions
-		tweet = regexp.MustCompile(`@\w+`).ReplaceAllString(tweet, "")
+		tweet = mentionRe.ReplaceAllString(tweet, "")
 
 		words := wordRe.FindAllString(strings.ToLower(tweet), -1)
 		seen := make(map[string]bool) // Count each word once per tweet
@@ -117,7 +123,7 @@ func ExtractTopics(tweets []string, limit int) []string {
 }
 
 func sortTopics(counts map[string]int) []TopicCount {
-	var topics []TopicCount
+	topics := make([]TopicCount, 0, len(counts))
 	for topic, count := range counts {
 		topics = append(topics, TopicCount{Topic: topic, Count: count})
 	}
